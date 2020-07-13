@@ -3,19 +3,32 @@ import re
 import numpy as np
 from typing import Dict, Union
 
+# This class handles the typical cells from a LibreOffice table.
+# Each cell has the information about its content, its alignment, its borders and 
+# how many rows and columns it occupies (for the case when one or more cells are
+# combined into one). 
 class Cell:
     def __init__(self):
+        # How many rows and columns it occupies
         self.width   = 1
         self.height  = 1
+
+        # The value of the cell. Currently we store it as a string
         self.val     = None
         self.covered = False
 
+        # What type is the value? This is used to set text different text properties to different
+        # value types. For example, integers and floats are right-aligned, whereas text is left-
+        # aligned.
         self.value_type = None
 
-        #self.borders = {'top': 'none', 'bottom': 'none', 'left': 'none', 'right': 'none'}
+        # Each cell has a style assigned to them. These styles define the borders and alignment.
+        # A style on its own does nothing, unless it is applied to the cell. Currently this is
+        # done with the Table.set_style() function.
         self.style = Style.Default()
         self.style_name = None
 
+        # Which borders are marked?
         self.borders = {
             'top'   : 'none',
             'left'  : 'none',
@@ -23,10 +36,10 @@ class Cell:
             'bottom': 'none',
             }
 
+        # Text alignment. Only horizontal is used for now
+        # TODO program vertical alignment
         self.alignment_v = 'none'
         self.alignment_h = 'none'
-
-        self.default_column_styles = None
 
     def set(self, val):
         self.val = val
