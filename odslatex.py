@@ -95,6 +95,9 @@ def minimal_latex(filename, tables):
 
     return(string)
 
+def print_help():
+    print('No help for you')
+
 if __name__ == '__main__':
     args = sys.argv
 
@@ -104,14 +107,27 @@ if __name__ == '__main__':
     what = 'table'
     which = 1
 
+    if len(sys.argv) < 2:
+        print_help()
+        quit()
+
+    args.pop(0)
+
+    fname_set = False
+    debug     = False
     while args:
         arg = args.pop(0)
 
-        if arg[:1] != '-':
-            fname_in = arg
-        elif arg == '--file':
-            fname_in = args.pop(0)
-        elif arg == '--output':
+        if not fname_set:
+            if arg == '--help':
+                print_help()
+                quit()
+            else:
+                fname_in  = arg
+                fname_set = True
+            continue
+
+        if arg == '--output':
             fname_out = open(args.pop(0), 'w')
         elif arg == '--list':
             what = 'list'
@@ -128,6 +144,11 @@ if __name__ == '__main__':
                 which = -1
             else:
                 which = int(str_arg)
+        elif arg == '--print-debug-info':
+            debug = True
+        elif arg == '--help':
+            print_help()
+            quit()
         else:
             raise Exception('Argument {} not recognized.'.format(arg))
 
@@ -155,6 +176,12 @@ if __name__ == '__main__':
     for instr in table_xml_instructions:
         table = tab.Table.from_xml_instructions(instr, style_xml_instructions)
         tables.append(table)
+
+    if debug:
+        for table in tables:
+            table.print_debug_info()
+
+    print()
 
     if what == 'minimal':
         output = minimal_latex(filename, tables)

@@ -44,6 +44,9 @@ class Cell:
     def set(self, val):
         self.val = val
 
+    def print_debug_info(self):
+        print(self.borders, self.covered, self.val, self.alignment_h, self.width, self.height)
+
 class Style:
     def __init__(self, name: str, data: Dict[str, Union[str, int]]):
         self.name    = name
@@ -161,6 +164,11 @@ class Table:
             if match_name:
                 self.name = match_name.group(1)
 
+    def print_debug_info(self):
+        for row in self.cells:
+            for cell in row:
+                cell.print_debug_info()
+
 # ==============================================================================================================
 #
 # Functions for getting information from the lines of an xml file
@@ -212,7 +220,6 @@ class Table:
 # ----------------------------------------------------------------------------------------------------------------
 # Get the instructions corresponding to rows from the lines of an xml file and separate them for each row
 # ----------------------------------------------------------------------------------------------------------------
-
     def get_row_instructions_from_xml(self, lines):
         n_repeat_row  = 1
 
@@ -301,8 +308,10 @@ class Table:
                 if append:
                     append = False
 
-                    for k in range(n_rep):
-                        curr_row_instr.append(new_instr)
+                    curr_row_instr.append(new_instr)
+
+                    for k in range(n_rep - 1):
+                        curr_row_instr.append([re.sub('table:number-columns-repeated="(.*?)"', '', new_instr[0])])
 
             for k in range(n_repeat_rows[n]):
                 cell_instructions.append(curr_row_instr)
@@ -316,6 +325,8 @@ class Table:
         read_cell = False
 
         rows = []
+        # This variable counts how many times it has to repeat covering cells
+        carry_covered = 0
 
         for nr in range(self.nrows):
             cells = []
@@ -330,6 +341,10 @@ class Table:
                 cell = Cell()
                 self.set_style(cell, self.default_column_styles[nc])
 
+                if carry_covered > 0:
+                    carry_covered -= 1
+                    covered = True
+
                 for instr in cell_instructions[nr][nc]:
                     match_ncols = re.search('table:number-columns-spanned="(.*?)"', instr)
                     if match_ncols:
@@ -341,6 +356,9 @@ class Table:
 
                     if re.search('covered', instr):
                         covered = True
+                        match_repeat = re.search('table:number-columns-repeated="(.*?)"', instr)
+                        if match_repeat:
+                            carry_covered = int(match_repeat.group(1)) - 1
 
                     match_text = re.search('text:p>(.*?)</text:p', instr)
                     if match_text:
@@ -499,20 +517,24 @@ class Table:
                 width  = curr_cell.width
 
                 borders = curr_cell.style.borders
+                alignment_h = curr_cell.alignment_h
+                alignment_v = curr_cell.alignment_v
 
                 if height > 1:
                     # Set the bottom border to none
                     self.cells[nr][nc].borders['bottom'] = 'none'
 
                     cell = Cell()
-                    cell.height  = height-1
-                    cell.width   = width
-                    cell.covered = False
-                    cell.val     = ""
-                    cell.borders = borders
+                    cell.height      = height-1
+                    cell.width       = width
+                    cell.covered     = False
+                    cell.val         = ""
+                    cell.borders     = borders
+                    cell.alignment_h = alignment_h
+                    cell.alignment_v = alignment_v
 
                     # The top border must be free since this is a multirow cell
-                    cell.borders[0] = 'none'
+                    cell.borders['top'] = 'none'
 
                     self.cells[nr+1][nc] = cell
 
