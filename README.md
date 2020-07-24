@@ -26,6 +26,7 @@ The available options are:
 * `--table` (default): Asks for a complete `tabular` environment containing the pertaining table/s
 * `--table-contents`: Returns only the table contents, without the `tabular` environment definitions.
 * `--which [WHICH]`: Selects which table in the document is to be converted. `[WHICH]` can be `all`, which converts all the tables contained in the document, or a number, which only converts one of the available tables. The numbers associated with each table can be obtained with the option `--list`.
+* `--print-debug-info`: Prints the contents, borders and alignment of every cell in every table.
 
 If you do not know how to create symbolic links and/or add variables to your path, then you can just wait until I write the installer, or use the files as they are by calling 
 ```
