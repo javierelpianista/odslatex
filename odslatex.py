@@ -96,7 +96,8 @@ def minimal_latex(filename, tables):
     return(string)
 
 def print_help():
-    print('No help for you')
+    for line in open('README.md', 'r').readlines():
+        print(line.strip())
 
 if __name__ == '__main__':
     args = sys.argv
