@@ -1,6 +1,7 @@
 import sys
 import re
 import numpy as np
+import copy
 from typing import Dict, Union
 
 # This class handles the typical cells from a LibreOffice table.
@@ -516,13 +517,15 @@ class Table:
                 height = curr_cell.height
                 width  = curr_cell.width
 
-                borders = curr_cell.style.borders
+                borders = copy.deepcopy(curr_cell.borders)
+
                 alignment_h = curr_cell.alignment_h
                 alignment_v = curr_cell.alignment_v
 
                 if height > 1:
                     # Set the bottom border to none
-                    self.cells[nr][nc].borders['bottom'] = 'none'
+                    curr_cell.borders['bottom'] = 'none'
+                    curr_cell.height = 1
 
                     cell = Cell()
                     cell.height      = height-1
