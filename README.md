@@ -2,19 +2,20 @@
 This is a Python program that converts Libreoffice tables in `.ods` format to plain text that you can paste directly in a LaTeX document.
 
 ## Requirements
-`odslatex` is designed to run with any modern GNU/Linux distribution. It runs on Python 3, and uses the following Python imports:
-* `os`
-* `sys`
-* `re`
-* `count`
-* `zipfile`
+`odslatex` is designed to run with any modern GNU/Linux distribution. It runs on Python 3, and depends on:
 * `typing`
 * `numpy`
 
 It also makes use of the `xmllint` program.
 
 ## Usage
-`odslatex` does not come with an installer (yet), so the best way to use it is to give execute permissions to `odslatex.py` (updating the shebang `#!/bin/python` if necessary), and creating a link named `odslatex` located in a directory included in your `$PATH` variable. Then, it can be used with:
+`odslatex` comes with a `setup.py` script. The easiest way to install it is `cd`-ing to the project folder and running 
+```
+pip install .
+```
+
+Once installed, it can be used with:
+
 ```
 odslatex [DOCUMENT] [OPTIONS]
 ```
@@ -42,18 +43,18 @@ I use Vim to edit my `.tex` files, so I have written a function that calls `fzf`
 There are some examples in the `./examples` folder. If you are within the main `odslatex` folder, you can try the following:
 ```
 mkdir -p tex
-python odslatex.py examples/example.ods --minimal-latex > tex/tex.tex
+odslatex examples/example.ods --minimal-latex > tex/example.tex
 cd tex
 pdflatex tex
 ```
 This will produce a `pdf` document containing the table in the example. Another possibility is
 ```
-python odslatex.py examples/fancy_table.ods --list
+odslatex examples/fancy_table.ods --list
 ```
 This will return the names of the tables available in `fancy_table.ods`.
 Then you can choose to convert one with
 ```
-python odslatex.py examples/fancy_table.ods --which N
+odslatex examples/fancy_table.ods --which N
 ```
 
 ## What odslatex can convert

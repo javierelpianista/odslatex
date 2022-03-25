@@ -1,4 +1,27 @@
-import sys
+'''
+odslatex: an open-source converter of LibreOffice ods spreadsheets into LaTeX code.
+
+Copyright (c) 2020-2022 Javier Garcia.
+
+The copyrights for code used from other parties are included in
+the corresponding files.
+
+This file is part of odslatex.
+
+odslatex is free software; you can redistribute it and/or modify
+it under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation, version 3.
+
+odslatex is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License along
+with odslatex; if not, write to the Free Software Foundation, Inc.,
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+'''
+
 import re
 import numpy as np
 import copy
