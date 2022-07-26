@@ -29,12 +29,6 @@ The available options are:
 * `--which [WHICH]`: Selects which table in the document is to be converted. `[WHICH]` can be `all`, which converts all the tables contained in the document, or a number, which only converts one of the available tables. The numbers associated with each table can be obtained with the option `--list`.
 * `--print-debug-info`: Prints the contents, borders and alignment of every cell in every table.
 
-If you do not know how to create symbolic links and/or add variables to your path, then you can just wait until I write the installer, or use the files as they are by calling 
-```
-python /path/to/odslatex.py [DOCUMENT] [OPTIONS]
-```
-(assuming that your default Python executable is Python 3).
-
 ### Typical use scenario
 The typical use case would be to write a LaTeX document using your preferred editor, and edit the tables with LibreOffice. You could have one file for each table, or all the tables in the same file. Then when you need the table you just call `odslatex name-of-the-table.ods`, copy the result to the clipboard and paste it in your `.tex` document.
 I use Vim to edit my `.tex` files, so I have written a function that calls `fzf` with the expression `*.ods`, takes the file selected by the user and calls `odslatex` on it, pasting the result directly into the `.tex` file.
