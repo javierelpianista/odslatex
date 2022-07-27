@@ -22,7 +22,7 @@ The available options are:
 * `-n,--which [WHICH]`: Selects which table in the document is to be converted. `[WHICH]` can be `all`, which converts all the tables contained in the document, or a number, which only converts one of the available tables. The numbers associated with each table can be obtained with the option `--list`. By default it is equal to 0.
 * `-o,--output-file`: Output to a file instead of the standard output.
 * `--minimal-latex`: Asks for a minimal LaTeX document containing the selected table. This document can be readily compiled to see if the table looks like it should.
-* `--table-contents`: Returns only the table contents, without the `tabular` environment definitions.
+* `--no-tabular`: Returns only the table contents, without the `tabular` environment definitions.
 * `--print-debug-info`: Prints the contents, borders and alignment of every cell in every table.
 
 ### Typical use scenario
@@ -45,6 +45,9 @@ Then you can choose to convert one with
 ```
 odslatex examples/fancy_table.ods --which N
 ```
+
+### Graphical interface? 
+It would be nice to have a graphical interface. For now, the `odslatex_zenity.sh` script is provided. It opens a file-select prompt where you can choose the file you want to convert. If the selected Calc document has more than one sheet, it asks you to select which sheet to convert. The result is pasted into the clipboard. To run it, you need to have installed both `zenity` and `xclip`, and some notification daemon running. Most Linux distributions should have these by default.
 
 ## What odslatex can convert
 Currently, the program can convert cells spanning multiple rows and columns into their corresponding `\multicolumn` and `\multirow` LaTeX environments. It can also detect borders and mark them, and detect horizontal alignment.

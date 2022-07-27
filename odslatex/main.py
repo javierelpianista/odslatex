@@ -22,19 +22,20 @@ from zipfile import ZipFile
 from lxml import etree
 import sys
 from .table import Table
+import copy
 
-parser = argparse.ArgumentParser(description = 'Hello')
+parser = argparse.ArgumentParser(description = 'odslatex: an open-source program to convert LibreOffice Calc spreadsheets into LaTeX tables.')
 parser.add_argument('-l', '--list', help='List the tables included in the ods document', action='store_true')
 parser.add_argument('-n', '--which', help='Choose which table from the file you want to convert (0 by default).', default=0)
 #parser.add_argument('--tmp', help='Choose the temporary directory', default='/tmp')
-parser.add_argument('--table-contents', help='Returns only the table contents, without the tabular environment definitions.', action='store_true')
-parser.add_argument('--minimal-latex', help='Produce a minimal LaTeX document to compile and see the table produced.', action='store_true')
+parser.add_argument('--no-tabular', help='Returns only the table contents, without the tabular environment definitions.', action='store_false', dest='write_tabular_environment')
+parser.add_argument('--minimal-latex', help='Produce a minimal LaTeX document to compile and see the table produced.', action='store_true' )
 parser.add_argument('-o', '--output-file', help='Output to file.', type=argparse.FileType('w'), default=sys.stdout)
 parser.add_argument('--print-debug-info', help='Print the contents of the parsed table for debugging purposes', action='store_true')
 
 parser.add_argument('filename', help='Filename')
 
-def list_tables(args):
+def list_tables(args, return_count=False):
     '''
     Extract the content.xml file from the original ods file and read the sheets
     in there. Print a list with al the sheet names.
@@ -63,9 +64,46 @@ def list_tables(args):
                 table.attrib[ etree.QName(ns['table'],'name') ]
                     )
 
-    print( 'List of sheets from {}:'.format(args.filename) )
+    if return_count:
+        return len(table_names)
+
+    ans = 'List of sheets from {}:\n'.format(args.filename)
     for n, name in enumerate(table_names):
-        print( '{:4d}: {:75}'.format(n, name) )
+        ans += '{:4d}: {:75}\n'.format(n, name)
+
+    return ans
+
+def latex_document(tables):
+    '''
+    Produce a LaTeX document from a list of tables
+
+    Parameters:
+    -----------
+
+    tables: a list of tables generated with the convert_table function.
+    '''
+
+    text  = '\\documentclass{article}\n'
+
+    if not isinstance(tables, list):
+        tables_list = [tables]
+    else:
+        tables_list = tables
+
+    for table_text in tables_list:
+        if 'multirow' in table_text:
+            text += '\\usepackage{multirow}\n'
+            break
+
+    text += '\n'
+    text += '\\begin{document}\n'
+
+    for table_text in tables_list:
+        text += table_text + '\\newpage'
+
+    text += '\\end{document}\n'
+
+    return text
 
 def convert_table(args):
     '''
@@ -79,23 +117,16 @@ def convert_table(args):
     which (int): which table to convert
     '''
 
-    table = Table.from_ods(args.filename,sheet=int(args.which))
+    table = Table.from_ods(args.filename,sheet=int(args.which),print_debug_info=args.print_debug_info)
     header, body, epilog = table.to_latex()
     body = beautify_body(body)
 
-    table_text = ''.join([header, body, epilog])
+    if args.write_tabular_environment:
+        table_text = ''.join([header, body, epilog])
+    else:
+        table_text = body
 
-    text = table_text
-    if args.minimal_latex:
-        text  = '\\documentclass{article}\n'
-        if 'multirow' in table_text:
-            text += '\\usepackage{multirow}\n'
-
-        text += '\n'
-        text += '\\begin{document}\n'
-        text += table_text
-        text += '\\end{document}\n'
-    return text
+    return table_text
 
 def beautify_body(body):
     import re 
@@ -204,12 +235,39 @@ def beautify_body(body):
     return body
 
 def main():
-    args = parser.parse_args()
+    args0 = parser.parse_args()
+
+    args = copy.copy(args0)
+
+    if args.minimal_latex and not args.write_tabular_environment:
+        raise Exception('You can either ask for a minimal LaTeX document or ' +
+                'for only the table contents. Not for both.')
 
     if args.list:
-        list_tables(args)
+        args.output_file.write(list_tables(args))
     else:
-        args.output_file.write(convert_table(args))
+        if args.which == 'all':
+            ntables = int(list_tables(args, return_count=True))
+
+            tables_list = []
+            for n in range(ntables):
+                args.which = n
+                tables_list.append(convert_table(args))
+
+            if args.minimal_latex:
+                args.output_file.write(latex_document(tables_list))
+            else:
+                for table_text in tables_list:
+                    args.output_file.write(table_text + '\\newpage') 
+
+        else:
+            n = int(args.which)
+
+            if args.minimal_latex:
+                args.output_file.write(latex_document(convert_table(args)))
+            else:
+                args.output_file.write(convert_table(args))
+
 
 if __name__ == '__main__':
     main()

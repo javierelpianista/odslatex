@@ -242,7 +242,8 @@ class Table:
     @classmethod
     def from_ods(cls, filename, **opts):
         options = {
-                'sheet' : 0 
+                'sheet' : 0 ,
+                'print_debug_info' : False
                 }
 
         options.update(**opts)
@@ -469,6 +470,38 @@ class Table:
                         else:
                             table.text_alignments[y,x] = cell_styles[style_name].attribs['text-align']
 
+
+        if options['print_debug_info']:
+            print(80*'+')
+            print('Debug information: ')
+            print(80*'-')
+            print('Top borders: ')
+            print(table.borders_top)
+            print()
+            print(80*'-')
+            print('Left borders:')
+            print(table.borders_left)
+            print()
+            print(80*'-')
+            print('Merged cells:')
+            print(table.merged)
+            print()
+            print(80*'-')
+            print('Owners: ')
+            print(table.owner)
+            print()
+            print(80*'-')
+            print('Cell sizes:')
+            print(table.sizes)
+            print()
+            print(80*'-')
+            print('Text alignments: ')
+            print(table.text_alignments)
+            print()
+            print(80*'-')
+            print()
+            print('End debug information.')
+            print(80*'+')
 
         return(table)
 
