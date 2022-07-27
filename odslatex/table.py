@@ -1,894 +1,641 @@
-'''
-odslatex: an open-source converter of LibreOffice ods spreadsheets into LaTeX code.
+# odslatex: an open-source program to convert LibreOffice Calc spreadsheets 
+# into LaTeX tables.
+#
+# Copyright (c) 2022, Javier Garcia.
+#
+# This file is part of odslatex.
+#
+# odslatex is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# odslatex is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# odslatex. If not, see <https://www.gnu.org/licenses/>.
 
-Copyright (c) 2020-2022 Javier Garcia.
-
-The copyrights for code used from other parties are included in
-the corresponding files.
-
-This file is part of odslatex.
-
-odslatex is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation, version 3.
-
-odslatex is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with odslatex; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-'''
-
-import re
 import numpy as np
-import copy
-from typing import Dict, Union
+from .style import Style
+from lxml import etree
+from zipfile import ZipFile
+import os
+import csv
 
-# This class handles the typical cells from a LibreOffice table.
-# Each cell has the information about its content, its alignment, its borders and 
-# how many rows and columns it occupies (for the case when one or more cells are
-# combined into one). 
-class Cell:
-    def __init__(self):
-        # How many rows and columns it occupies
-        self.width   = 1
-        self.height  = 1
+class Table:
+    def __init__(self,h,w):
+        '''
+        Create a Table object.
 
-        # The value of the cell. Currently we store it as a string
-        self.val     = None
-        self.covered = False
+        Paramters:
+        ----------
 
-        # What type is the value? This is used to set text different text properties to different
-        # value types. For example, integers and floats are right-aligned, whereas text is left-
-        # aligned.
-        self.value_type = None
+        h: height of the table
+        w: width of the table
+        '''
 
-        # Each cell has a style assigned to them. These styles define the borders and alignment.
-        # A style on its own does nothing, unless it is applied to the cell. Currently this is
-        # done with the Table.set_style() function.
-        self.style = Style.Default()
-        self.style_name = None
+        self.data = []
+        for _ in range(h):
+            self.data.append(w*[''])
 
-        # Which borders are marked?
-        self.borders = {
-            'top'   : 'none',
-            'left'  : 'none',
-            'right' : 'none',
-            'bottom': 'none',
-            }
+        self.borders_top   = np.zeros([h+1,w],dtype=bool)
+        self.borders_left  = np.zeros([h,w+1],dtype=bool)
+        self.merged = np.zeros([h,w], dtype=bool)
+        self.owner  = np.zeros([h,w,2], dtype=int)
+        self.sizes  = np.ones([h,w,2], dtype=int)
+        self.text_alignments = np.tile('default', [h,w])
 
-        # Text alignment. Only horizontal is used for now
-        # TODO program vertical alignment
-        self.alignment_v = 'none'
-        self.alignment_h = 'none'
+        for y in range(h):
+            for x in range(w):
+                self.owner[y,x,0] = y
+                self.owner[y,x,1] = x
 
-    def set(self, val):
-        self.val = val
+        self.h = h
+        self.w = w
 
-    def print_debug_info(self):
-        print(self.borders, self.covered, self.val, self.alignment_h, self.width, self.height)
+    def __repr__(self):
+        # First we determine the max width of each column
+        maxw = self.w*[0]
 
-class Style:
-    def __init__(self, name: str, data: Dict[str, Union[str, int]]):
-        self.name    = name
-        self.data    = {}
-        self.borders = {}
+        # First pass. Only count width of umerged cells.
+        for y in range(self.h):
+            for x in range(self.w):
+                #if self.merged[y][x] and not np.all(self.owner[y,x,:] == np.array([y,x])):
+                if self.sizes[y][x][1] > 1: 
+                    continue
+
+                if len(self.data[y][x]) > maxw[x]:
+                    maxw[x] = len(self.data[y][x])
+
+        # Now see if the allocated space is enough for merged cells
+        for y in range(self.h):
+            for x in range(self.w):
+                cell_width = self.sizes[y][x][1]
+                if cell_width > 1:
+                    cell_length = len(self.data[y][x])
+                    combined_length = sum(maxw[x:x+cell_width]) + 2*(cell_width-1)
+
+                    if cell_length > combined_length:
+                        dif = cell_length - combined_length
+                        extra_space = dif//cell_width
+                        extra_space_2 = dif - cell_width*extra_space
+                        if extra_space_2: extra_space += 1
+
+                        for n in range(cell_width):
+                            maxw[x+n] += extra_space
+
+        ans = ''
+        for y in range(self.h):
+            # First draw the top border
+            border_str = ' '
+            for x in range(self.w):
+                border_str += ''.join((maxw[x]+2)*['-' if self.borders_top[y][x] else ' '])
+                border_str += ' '
+
+            ans += border_str + '\n'
+
+            # Now write the data
+            for x in range(self.w):
+                if self.sizes[y,x,1] != 0:
+                    cell_width = sum(maxw[x:x+self.sizes[y,x,1]]) + 3*self.sizes[y,x,1]-1
+                    fmt_str = ('|' if self.borders_left[y][x] else ' ') + '{:^' + str(cell_width) + '}' 
+                    ans += fmt_str.format(self.data[y][x])
+
+                if x == self.w-1:
+                    ans += '|' if self.borders_left[y][-1] else ' '
+
+            ans += '\n'
+
+        border_str = ' '
+        for x in range(self.w):
+            border_str += ''.join((maxw[x]+2)*['-' if self.borders_top[self.h][x] else ' '])
+            border_str += ' '
+        ans += border_str + '\n'
+        return ans
+
+    def add_column(self, pos):
+        for y in range(self.h):
+            self.data[y].insert(pos, '')
+
+        self.borders_left  = np.insert(self.borders_left, pos, self.borders_left[:,pos], axis=1)
+        self.borders_top   = np.insert(self.borders_top, pos, self.borders_top[:,pos], axis=1)
+
+        self.w += 1
+
+    def add_row(self, pos):
+        self.data.insert(pos, ['']*self.w)
+
+        self.borders_left = np.insert(self.borders_left, pos, self.borders_left[pos,:], axis=0)
+        self.borders_top = np.insert(self.borders_top, pos, self.borders_top[pos,:], axis=0)
+
+        self.h += 1
+
+    def merge_cells(self,y0,x0,h,w):
+        self.sizes[y0,x0,:] = [h,w]
+
+        if h == 1 and w == 1: return
+
+        for y in range(y0,y0+h):
+            for x in range(x0,x0+w):
+                self.merged[y,x] = True
+                self.owner[y,x,:] = [y0,x0]
+
+                if x != x0:
+                    self.borders_left[y][x] = False
+
+                if y != y0:
+                    self.borders_top[y][x] = False
+
+                if x != x0 or y != y0:
+                    self.data[y][x] = '*'
+                    self.sizes[y,x,:] = 0
+
+    def set(self,y,x,value):
+        self.data[y][x] = value
+
+    def get_cell_dimensions(self, y0, x0):
+        '''
+        Return the dimensions of the cell that starts in (y0,x0).
+        '''
+
+        if np.any(self.owner[y0,x0,:] != np.array([y0,x0])):
+            raise Exception('The set of coordinates provided do not ' +
+                    'correspond to the beginning of a cell.')
+
+        y = y0
+        x = x0
+
+        while y < self.h and np.all(self.owner[y,x0,:] == np.array([y0,x0])):
+            y+=1
+
+        while x < self.w and np.all(self.owner[y0,x,:] == np.array([y0,x0])):
+            x+=1
+
+        return y-y0, x-x0
+
+
+    def set_borders(self, y0, x0, borders):
+        '''
+        Set the borders of this cell. borders should be a list containing
+        boolean values for [top, right, bottom, left] borders.
+        If the borders are already set, then we do not overwrite.
+        '''
+
+        h, w = self.get_cell_dimensions(y0, x0)
+
+        # Set the top and bottom borders
+        for x in range(x0, x0+w):
+            if borders[0]:
+                self.borders_top[y0,x] = True
+            if borders[2]:
+                self.borders_top[y0+h,x] = True
+
+        # Set the right and left borders
+        for y in range(y0, y0+h):
+            if borders[1]:
+                self.borders_left[y,x0+w] = True
+            if borders[3]:
+                self.borders_left[y,x0] = True
+
+
+    def all_elements(self):
+        '''
+        An iterator that runs over all the indices of the table in order, from
+        left to right and then from top to bottom.
+
+        Returns:
+        --------
+        (y,x) tuple
+        '''
+
+        y = 0
+        x = -1
+
+        while y < self.h:
+            if x < self.w-1: 
+                x += 1
+
+            else:
+                y += 1
+                x = 0
+
+            if y < self.h and np.all(self.owner[y,x,:] == [y,x]):
+                yield y, x
 
     @classmethod
-    def Default(cls):
-        style = Style('Default', dict())
+    def from_csv_file(cls, filename):
+        lines = open(filename, 'r').readlines()
+        data = []
+        for line in csv.reader(lines):
+            data.append(line)
 
-        style.borders = {
-            'top'   : 'none',
-            'left'  : 'none',
-            'right' : 'none',
-            'bottom': 'none',
-            }
+        h = len(data)
+        w = len(data[0])
 
-        style.data = {
-                'family'      : 'table-cell', 
-                'parent'      : None, 
-                'alignment_h' : None,
-                'alignment_v' : None
+        table = cls(h,w)
+        table.data = data
+
+        return table
+
+    @classmethod
+    def from_ods(cls, filename, **opts):
+        options = {
+                'sheet' : 0 
                 }
 
-        return(style)
-
-    def set_data(self, data_dict):
-        for entry, val in data_dict.items():
-            if entry == 'borders':
-                self.borders = val
-            else:
-                self.data[entry] = val
-
-
-def write_cell(cell, fmt1 = '', fmt2 = '', al = ''):
-    value = str(cell.val) if cell.val else ""
-
-    if cell.width == 1 and fmt1 == '' and fmt2 == '' and al == '':
-        if cell.height == 1:
-            string = value
-        else:
-            string = "\\multirow{" + str(cell.height) + "}{*}{" + value + "}"
-    else:
-        if cell.height != 1:
-            value = "\\multirow{" + str(cell.height) + "}{*}{" + value + "}"
-
-        string = "\\multicolumn{" + str(cell.width) + "}{" + fmt1.strip() + al + fmt2.strip() + "}{" + value + "}"
-
-    return(string)
-            
-class Table:
-    def __init__(self):
-        # Cells is a list of lists; cells[i][j] contains the cell belonging to row i and column j
-        self.cells  = []
-
-        self.ncols  = 0
-        self.nrows  = 0
-
-        # This variable holds information about styles as read from the xml file. 
-        # Later we interpret this and set the information for each cell.
-        self.styles = [Style.Default()]
-
-        self.name = ""
-
-    def set_nrows(self):
-        self.nrows = len(self.cells)
-
-    def set_ncols(self):
-        ncols = -1
-        for n in range(nrows):
-            if ncols != -1 and len(self.cells[n]) != ncols:
-                raise Exception('ERROR! in Table.latex(). Not all the rows have the same amount of columns')
-
-            ncols = len(self.cells[n])
-
-        self.ncols = ncols
-
-    def shape(self):
-        return (self.nrows, self.ncols)
-
-    def get_style(self, name):
-        for style in self.styles:
-            if style.name == name:
-                return(style)
-
-        raise Exception('In Table.get_style. Style name {} not found'.format(name))
-
-    def get_style_value(self, name : str, value):
-        for style in self.styles:
-            if style.name == name:
-                return(style.data[value])
-
-    # Sets the parameters of a cell according to a style
-    def set_style(self, cell, style_name):
-        for style in self.styles:
-            if style.name == style_name:
-                cell.style = style
-                cell.borders = style.borders
-
-                if style.data['alignment_h']:
-                    cell.alignment_h = style.data['alignment_h'] 
-                else:
-                    if cell.value_type == 'float':
-                        cell.alignment_h = 'end'
-                    elif cell.value_type == 'string':
-                        cell.alignment_h = 'start'
-                    else:
-                        # This includes cells that don't have information; we need to have their alignment explicit because write_cell needs it
-                        cell.alignment_h = 'end'
-
-    def set_name(self, instructions):
-        for instr in instructions:
-            match_name = re.search(r'table:name="(.*?)"', instr)
-
-            if match_name:
-                self.name = match_name.group(1)
-
-    def print_debug_info(self):
-        for row in self.cells:
-            for cell in row:
-                cell.print_debug_info()
-
-# ==============================================================================================================
-#
-# Functions for getting information from the lines of an xml file
-# The file needs to be processed with xmllint --format
-#
-# ==============================================================================================================
-    def set_shape_from_xml(self, lines):
-        count_columns = False
-        table_ncols = 0
-        table_nrows = 0
-
-        read_cell = False
-        cells = []
-
-        table_nrows = 0
-
-        for line in lines:
-            instruction = re.match(r'<(.*)>', line).group(1)
-
-            # Here we read the instruction to count the number of columns.
-            # We do so by looking at the table:table-column entries
-            if re.match(r'table:table\s', instruction):
-                count_columns = True
-            elif re.match(r'/table:table', instruction) and count_columns:
-                count_columns = False
-            elif re.match(r'table:table-column\s', instruction) and count_columns:
-                data = instruction.split(" ")
-
-                ncols = 1
-                for text in data:
-                    match = re.match('table:number-columns-repeated="(.*)"', text)
-                    if match:
-                        ncols = int(match.group(1))
-
-                table_ncols += ncols
-
-            # Here we count the number of rows
-            if re.match(r'table:table-row\s', instruction):
-                nrows = 1
-                match2 = re.search(r'table:number-rows-repeated="(.*)"', instruction)
-                if match2:
-                    nrows = int(match2.group(1))
-
-                table_nrows += nrows
-
-        self.nrows = table_nrows
-        self.ncols = table_ncols
-
-# ----------------------------------------------------------------------------------------------------------------
-# Get the instructions corresponding to rows from the lines of an xml file and separate them for each row
-# ----------------------------------------------------------------------------------------------------------------
-    def get_row_instructions_from_xml(self, lines):
-        n_repeat_row  = 1
-
-        row_instructions = []
-        n_repeat_rows = []
-
-        read_row  = False
-        read_cell = False
-        reading = False
-
-        for line in lines:
-            row_start  = re.match('<table:table-row(.*)>',  line)
-            row_end    = re.match('</table:table-row(.*)>', line)
-            row_inline = re.match('<table:table-row(.*)/>', line)
-            match_n    = re.search('number-rows-repeated="(.*)"', line)
-
-            if row_inline:
-                row_instructions.append(line)
-                if match_n:
-                    n_repeat_row = int(match_n.group(1))
-                else:
-                    n_repeat_row = 1
-
-                n_repeat_rows.append(n_repeat_row)
-
-            elif row_start:
-                reading = True
-                new_row = []
-                new_row.append(line)
-
-                if match_n:
-                    n_repeat_row = int(match_n.group(1))
-                else:
-                    n_repeat_row = 1
-
-            elif row_end:
-                new_row.append(line)
-                row_instructions.append(new_row)
-                reading = False
-                n_repeat_rows.append(n_repeat_row)
-
-            elif reading:
-                new_row.append(line)
-
-        return(row_instructions, n_repeat_rows)
-
-# ----------------------------------------------------------------------------------------------------------------
-# Get the instructions corresponding to cells from those separated by row with get_row_instructions_from_xml
-# ----------------------------------------------------------------------------------------------------------------
-    def get_cell_instructions_from_xml_row_instructions(self, row_instructions, n_repeat_rows):
-        # cell_instructions[i][j][k] contains the kth instuction for the jth cell of row i
-        cell_instructions = []
-
-        append = False
-        reading = False
-        n_repeat_cell = 1
-        for n, ins in enumerate(row_instructions):
-            curr_row_instr = []
-
-            n_rep = 1
-            for row_instruction in ins:
-                cell_inline = re.match('<table:(covered-)?table-cell(.*?)/>', row_instruction)
-                cell_start  = re.match('<table:(covered-)?table-cell(.*?)>',  row_instruction)
-                cell_end    = re.match('</table:(covered-)?table-cell(.*?)>', row_instruction)
-                match_rep   = re.search('table:number-columns-repeated="(.*?)"', row_instruction)
-
-                if match_rep:
-                    n_rep = int(match_rep.group(1))
-
-                if cell_inline:
-                    new_instr = [row_instruction]
-                    append = True
-
-                elif cell_start:
-                    new_instr = [row_instruction]
-                    reading = True
-
-                elif cell_end:
-                    new_instr.append(row_instruction)
-                    reading = False
-                    append  = True
-
-                elif reading:
-                    new_instr.append(row_instruction)
-
-                if append:
-                    append = False
-
-                    curr_row_instr.append(new_instr)
-
-                    for k in range(n_rep - 1):
-                        curr_row_instr.append([re.sub('table:number-columns-repeated="(.*?)"', '', new_instr[0])])
-
-            for k in range(n_repeat_rows[n]):
-                cell_instructions.append(curr_row_instr)
-
-        return(cell_instructions)
-
-# ----------------------------------------------------------------------------------------------------------------
-# Read a table from the instructions collected with get_cell_instructions_from_xml_row_instructions
-# ----------------------------------------------------------------------------------------------------------------
-    def read_from_xml_cell_instructions(self, cell_instructions):
-        read_cell = False
-
-        rows = []
-        # This variable counts how many times it has to repeat covering cells
-        carry_covered = 0
-
-        for nr in range(self.nrows):
-            cells = []
-
-            for nc in range(self.ncols):
-                nrows   = 1
-                ncols   = 1
-                style   = None
-                covered = False
-                val     = ""
-
-                cell = Cell()
-                self.set_style(cell, self.default_column_styles[nc])
-
-                if carry_covered > 0:
-                    carry_covered -= 1
-                    covered = True
-
-                for instr in cell_instructions[nr][nc]:
-                    match_ncols = re.search('table:number-columns-spanned="(.*?)"', instr)
-                    if match_ncols:
-                        ncols = int(match_ncols.group(1))
-
-                    match_nrows = re.search('table:number-rows-spanned="(.*?)"', instr)
-                    if match_nrows:
-                        nrows = int(match_nrows.group(1))
-
-                    if re.search('covered', instr):
-                        covered = True
-                        match_repeat = re.search('table:number-columns-repeated="(.*?)"', instr)
-                        if match_repeat:
-                            carry_covered = int(match_repeat.group(1)) - 1
-
-                    match_text = re.search('text:p>(.*?)</text:p', instr)
-                    if match_text:
-                        val = match_text.group(1)
-
-                    match_style = re.search('table:style-name="(.*?)"', instr)
-                    if match_style:
-                        cell.style_name = match_style.group(1)
-
-                    match_type = re.search('office:value-type="(.*?)"', instr)
-                    if match_type:
-                        cell.value_type = match_type.group(1)
-
-                cell.width   = ncols
-                cell.height  = nrows
-                cell.covered = covered
-                cell.val     = val
-
-                if cell.style_name:
-                    self.set_style(cell, cell.style_name)
-                else:
-                    curr_style = self.default_column_styles[nc]
-                    cell.style_name = curr_style
-                    self.set_style(cell, curr_style)
-
-                cells.append(cell)
-
-            rows.append(cells)
-
-        self.cells = rows
-
-    def read_style_from_xml_instructions(self, instructions):
-        styles = []
-
-        for style_instr in instructions:
-            style_dict = {'borders' : dict()}
-
-            for instr in style_instr:
-                match_name = re.search('style:name="(.*?)"', instr)
-                if match_name:
-                    name = match_name.group(1)
-
-                match_family = re.search('style:family="(.*?)"', instr)
-                if match_family:
-                    style_dict['family'] = match_family.group(1)
-
-                match_parent = re.search('style:parent-style-name="(.*?)"', instr)
-                if match_parent:
-                    style_dict['parent'] = match_parent.group(1)
-
-                match_border1 = re.search('fo:border="(.*?)"', instr)
-                if match_border1:
-                    expr = match_border1.group(1)
-
-                    if 'solid' in expr:
-                        for border in ['top', 'left', 'bottom', 'right']:
-                            style_dict['borders'][border] = 'solid'
-
-                else:
-                    for border in ['top', 'left', 'bottom', 'right']:
-                        match_border = re.search('fo:border-{}="(.*?)"'.format(border), instr)
-                        if match_border:
-                            expr = match_border.group(1)
-
-                            if expr == 'none':
-                                style_dict['borders'][border] = 'none'
+        options.update(**opts)
+
+        with ZipFile(filename, 'r') as zipobj:
+            xml_content = zipobj.read('content.xml')
+            #os.system('xmllint --format ' + os.path.join(tmpdir, 'content.xml') + '>' + os.path.join(tmpdir, 'content2.xml'))
+
+        #tree = etree.parse('test2/content.xml')
+        tree = etree.fromstring(xml_content)
+
+        ns = {
+                'table'  : 'urn:oasis:names:tc:opendocument:xmlns:table:1.0',
+                'office' : 'urn:oasis:names:tc:opendocument:xmlns:office:1.0',
+                'text'   : 'urn:oasis:names:tc:opendocument:xmlns:text:1.0',
+                'style'  : 'urn:oasis:names:tc:opendocument:xmlns:style:1.0',
+                'fo'     : 'urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0'
+                }
+
+        default_style = Style({})
+
+        # Read all the row, column, and cell styles
+        column_styles = {}
+        row_styles    = {}
+        cell_styles   = {
+                'Default' : default_style
+                }
+
+        for style in tree.iter(etree.QName(ns['style'],'style')):
+            family = style.attrib[etree.QName(ns['style'],'family')]
+
+            if family == 'table-row':
+                family = style.attrib[etree.QName(ns['style'],'family')]
+                row_styles[family] = None
+
+            elif family == 'table-column':
+                family = style.attrib[etree.QName(ns['style'],'family')]
+                column_styles[family] = None
+
+            elif family == 'table-cell':
+                # Here we read the borders of the style
+
+                # First, set default values
+                borders = 4*[False]
+
+                # Vertical alignment (TODO: not used yet)
+                v_al = None
+
+                # Text alignment
+                t_al = None
+
+                bt_tag = etree.QName(ns['fo'],'border-top')
+                br_tag = etree.QName(ns['fo'],'border-right')
+                bb_tag = etree.QName(ns['fo'],'border-bottom')
+                bl_tag = etree.QName(ns['fo'],'border-left')
+                b__tag = etree.QName(ns['fo'],'border')
+
+                v_al_tag = etree.QName(ns['style'],'vertical-align')
+
+                t_al_tag = etree.QName(ns['fo'],'text-align')
+
+                style_name = style.attrib[etree.QName(ns['style'],'name')]
+
+                for prop in style.iter(etree.QName(ns['style'],'table-cell-properties')):
+                    if bt_tag in prop.attrib:
+                        if 'solid' in prop.attrib[bt_tag]:
+                            borders[0] = True
+
+                    if br_tag in prop.attrib:
+                        if 'solid' in prop.attrib[br_tag]:
+                            borders[1] = True
+
+                    if bb_tag in prop.attrib:
+                        if 'solid' in prop.attrib[bb_tag]:
+                            borders[2] = True
+
+                    if bl_tag in prop.attrib:
+                        if 'solid' in prop.attrib[bl_tag]:
+                            borders[3] = True
+
+                    if b__tag in prop.attrib:
+                        if 'solid' in prop.attrib[b__tag]:
+                            borders = [True, True, True, True]
+
+                    if v_al_tag in prop.attrib:
+                        v_al = prop.attrib[v_al_tag]
+
+
+                for prop in style.iter(etree.QName(ns['style'],'paragraph-properties')):
+                    if t_al_tag in prop.attrib:
+                        t_al = prop.attrib[t_al_tag]
+
+                cell_styles[style_name] = \
+                        Style({ 'name'               : style_name,
+                                'borders'            : borders})
+
+                if t_al:
+                    cell_styles[style_name].attribs['text-align'] = t_al
+
+                if v_al:
+                    cell_styles[style_name].attribs['vertical-align'] = v_al
+
+        #for _, curr_style in cell_styles.items():
+        #    print(curr_style.attribs['name'], curr_style.attribs['text-align'])
+
+        # Now select the correct table.
+        n = -1
+        iterator = tree.iter(etree.QName(ns['table'],'table'))
+        try: 
+            while n != options['sheet']:
+                tree = next(iterator)
+                n += 1
+        except StopIteration as e:
+            print(80*'-')
+            print()
+            print('Table number {} not found in the file {}.'.format(options['sheet'], filename))
+            print()
+            print(80*'-')
+            raise e
+
+
+        # Count number of rows
+        nrows = 0
+        for row in tree.iter(etree.QName(ns['table'],'table-row')):
+            nrep = 1
+            key = etree.QName(ns['table'],'number-rows-repeated')
+            if key in row.attrib:
+                nrep = int(row.attrib[key])
+
+            nrows += nrep
+
+        # Count number of columns
+        ncols = 0
+        for col in tree.iter(etree.QName(ns['table'],'table-column')):
+            nrep = 1
+            key = etree.QName(ns['table'],'number-columns-repeated')
+            if key in col.attrib:
+                nrep = int(col.attrib[key])
+            ncols += nrep
+
+        table = cls(nrows,ncols)
+        iterator = table.all_elements()
+
+        # Read all the default cell style in each column
+        column_default_styles = table.w*[None]
+
+        n = 0
+        for col in tree.iter(etree.QName(ns['table'],'table-column')):
+            nrep = 1
+            key = etree.QName(ns['table'],'number-columns-repeated')
+            if key in col.attrib:
+                nrep = int(col.attrib[key])
+
+            key = etree.QName(ns['table'],'default-cell-style-name')
+            for _ in range(nrep):
+                column_default_styles[n] = col.attrib[key]
+                n+=1
+
+        # Read all the cells in the table
+        for row in tree.iter(etree.QName(ns['table'],'table-row')):
+            key = etree.QName(ns['table'],'number-rows-repeated')
+            nrep_row = 1
+            if key in row.attrib:
+                nrep_row = int(row.attrib[key])
+
+            for _ in range(nrep_row):
+                for cell in row.iter(etree.QName(ns['table'],'table-cell')):
+                    key = etree.QName(ns['table'],'number-columns-repeated')
+                    nrep = 1
+                    if key in cell.attrib:
+                        nrep = int(cell.attrib[key])
+
+                    for _ in range(nrep):
+                        y,x = next(iterator)
+                        
+                        nrows_spanned = 1
+                        ncols_spanned = 1
+
+                        # Check how many columns the cell spans
+                        key = etree.QName(ns['table'],'number-columns-spanned')
+                        if key in cell.attrib:
+                            ncols_spanned = int(cell.attrib[key])
+
+                        # Now check how many rows the cell spans
+                        key = etree.QName(ns['table'],'number-rows-spanned')
+                        if key in cell.attrib:
+                            nrows_spanned = int(cell.attrib[key])
+
+                        # Now merge cells if required
+                        if nrows_spanned > 1 or ncols_spanned > 1:
+                            table.merge_cells(y,x,nrows_spanned,ncols_spanned) 
+
+                        # Read and set the text of the cell
+                        found = cell.find(etree.QName(ns['text'],'p'))
+                        if found is not None:
+                            table.set(y,x,found.text)
+
+                        # Read the cell style
+                        key = etree.QName(ns['table'],'style-name')
+
+                        if key in cell.attrib:
+                            style_name = cell.attrib[key]
+                        else:
+                            style_name = column_default_styles[x]
+
+                        # Set borders
+                        borders = cell_styles[style_name].attribs['borders']
+                        table.set_borders(y,x,borders)
+
+                        # Set text alignment
+                        if cell_styles[style_name].attribs['text-align'] == 'Default':
+                            key = etree.QName(ns['office'],'value-type')
+                            if key in cell.attrib:
+                                value_type = cell.attrib[key]
                             else:
-                                data = expr.split(" ")
-                                if 'solid' in data:
-                                    style_dict['borders'][border] = 'solid'
+                                value_type = None
 
-                match_alignment_v = re.search('style:vertical-align="(.*?)"', instr)
-                if match_alignment_v:
-                    style_dict['alignment_v'] = match_alignment_v.group(1)
+                            if value_type == 'string' or value_type == None:
+                                table.text_alignments[y,x] = 'start'
+                            elif value_type == 'float':
+                                table.text_alignments[y,x] = 'end'
+                            else:
+                                raise Exception('Unknown value type: {}'.format(value_type))
+                        else:
+                            table.text_alignments[y,x] = cell_styles[style_name].attribs['text-align']
 
-                match_alignment_h = re.search('fo:text-align="(.*?)"', instr)
-                if match_alignment_h:
-                    style_dict['alignment_h'] = match_alignment_h.group(1)
-
-
-            style = Style.Default()
-            style.name = name
-            style.set_data(style_dict)
-            styles.append(style)
-
-        self.styles = self.styles + styles
-
-        # Copy the unset borders from the parent styles
-        for n in range(len(self.styles)):
-            if self.styles[n].data['family'] == 'table-cell':
-                for border in ['top', 'left', 'bottom', 'right']:
-                    if not border in self.styles[n].borders:
-                        self.styles[n].borders[border] = self.get_style(self.styles[n].data['parent']).borders[border]
-    
-    def get_default_column_styles(self, lines):
-        default_column_styles = []
-
-        for line in lines:
-            is_table_column = re.match('<table:table-column(.*)', line)
-
-            if is_table_column:
-                expr = is_table_column.group(1)
-                match_default_style = re.search('table:default-cell-style-name="(.*?)"', expr)
-                match_repeat        = re.search('table:number-columns-repeated="(.*?)"', expr)
-
-                if match_repeat:
-                    n_rep = int(match_repeat.group(1))
-                else:
-                    n_rep = 1
-
-                if match_default_style:
-                    style = match_default_style.group(1)
-
-                for n in range(n_rep):
-                    default_column_styles.append(style)
-
-        self.default_column_styles = default_column_styles
-
-    @classmethod
-    def from_xml_instructions(cls, table_instructions, style_instructions):
-        # Read the xml file
-        table = Table()
-
-        # Get the shape of the table 
-        table.set_shape_from_xml(table_instructions)
-
-        # Read the different styles
-        table.get_default_column_styles(table_instructions)
-        #style_instr = table.read_style_instructions_from_xml(style_instructions)
-        table.read_style_from_xml_instructions(style_instructions)
-
-        # Read the different cells
-        table.set_name(table_instructions)
-        a, b  = table.get_row_instructions_from_xml(table_instructions)
-        cell_instr = table.get_cell_instructions_from_xml_row_instructions(a, b)
-        table.read_from_xml_cell_instructions(cell_instr)
 
         return(table)
 
-# ----------------------------------------------------------------------------------------------------------------
-# These functions are used to convert the table into latex format
-# ----------------------------------------------------------------------------------------------------------------
 
-    # This splits multirow cells into single row cells; the one at the top contains the text while those at the bottom are empty, multicolumn rows 
-    def split_vertical(self):
-        nrows, ncols = self.shape()
+    def draw_horizontal_border(self,y):
+        borders = self.borders_top[y,:]
 
-        for nr in range(nrows):
-            for nc in range(ncols):
-                curr_cell = self.cells[nr][nc]
+        lines = []
+        draw  = []
+        n = 0
 
-                if curr_cell.covered:
-                    continue
+        status = borders[0]
 
-                height = curr_cell.height
-                width  = curr_cell.width
-
-                borders = copy.deepcopy(curr_cell.borders)
-
-                alignment_h = curr_cell.alignment_h
-                alignment_v = curr_cell.alignment_v
-
-                if height > 1:
-                    # Set the bottom border to none
-                    curr_cell.borders['bottom'] = 'none'
-                    curr_cell.height = 1
-
-                    cell = Cell()
-                    cell.height      = height-1
-                    cell.width       = width
-                    cell.covered     = False
-                    cell.val         = ""
-                    cell.borders     = borders
-                    cell.alignment_h = alignment_h
-                    cell.alignment_v = alignment_v
-
-                    # The top border must be free since this is a multirow cell
-                    cell.borders['top'] = 'none'
-
-                    self.cells[nr+1][nc] = cell
-
-    def get_horizontal_lines(self):
-        # For each row, check if the bottom or top of the cell is marked
-        drawn_indices = []
-
-        nrows, ncols = self.shape()
-
-        for nr in range(-1, nrows):
-            x = 0
-            drawn_indices_row = set()
-
-            for nc in range(ncols):
-                x+=1
-
-                if nr >= 0: 
-                    cell_curr = self.cells[nr][nc]
-
-                    if not cell_curr.covered:
-                        if cell_curr.borders['bottom'] == 'solid':
-                            for d in range(cell_curr.width):
-                                drawn_indices_row.add(d+x)
-
-                if nr < nrows - 1:
-                    cell_next = self.cells[nr+1][nc]
-                    if not cell_next.covered:
-                        if cell_next.borders['top'] == 'solid':
-                            for d in range(cell_next.width):
-                                drawn_indices_row.add(d+x)
-
-            drawn_indices.append(drawn_indices_row)
-
-        # Now compact consecutive indices into tuples
-        ndd = []
-        for di in drawn_indices:
-            nd = []
-
-            di_l = list(sorted(di))
-
-            if len(di_l) == 0:
-                ndd.append([])
-                continue
-
-            start = di_l[0]
-            new   = di_l[0]
-
-            nd = []
-
-            if len(di_l) == 1:
-                nd = [(di_l[0], di_l[0])]
-
+        for x in range(self.w):
+            if borders[x] == status:
+                n += 1
             else:
-                for n in range(1, len(di_l)):
-                    old = new
-                    new = di_l[n]
+                lines.append(n)
+                draw.append(status)
+                n = 1
 
-                    if new > old + 1:
-                        nd.append((start, old))
-                        start = new
+            status = borders[x]
+            if x == self.w-1:
+                lines.append(n)
+                draw.append(status)
+                n = 1
 
-                if start != new: 
-                    nd.append((start, new))
-
-            ndd.append(nd)
-
-        return(ndd)
-
-# ----------------------------------------------------------------------------------------------------------------
-
-    def get_vertical_lines(self):
-        # For each row, check if the left or right border of the cell is marked
-        drawn_indices = []
-
-        nrows, ncols = self.shape()
-
-        for nc in range(-1, ncols):
-            x = 0
-            drawn_indices_col = set()
-
-            for nr in range(nrows):
-                x+=1
-
-                if nc >= 0: 
-                    cell_curr = self.cells[nr][nc]
-
-                    if not cell_curr.covered:
-                        if cell_curr.borders['right'] == 'solid':
-                            for d in range(cell_curr.height):
-                                drawn_indices_col.add(d+x)
-
-                if nc < ncols - 1:
-                    cell_next = self.cells[nr][nc+1]
-                    if not cell_next.covered:
-                        if cell_next.borders['left'] == 'solid':
-                            for d in range(cell_next.height):
-                                drawn_indices_col.add(d+x)
-
-            drawn_indices.append(sorted(drawn_indices_col))
-
-        return(drawn_indices)
-
-# ----------------------------------------------------------------------------------------------------------------
-
-    def get_column_alignments(self):
-        from collections import Counter
-
-        nrows, ncols = self.shape()
-
-        alignments = []
-
-        for nc in range(ncols):
-            col_alignments = []
-
-            for nr in range(nrows):
-                col_alignments.append(self.cells[nr][nc].alignment_h)
-
-            count = Counter(col_alignments)
-            col_alignment = count.most_common(1)[0][0]
-
-            alignments.append(col_alignment)
-
-        return(alignments)
-
-# ----------------------------------------------------------------------------------------------------------------
-
-    def alignment_char(self, alignment):
-        if alignment == 'start':
-            return('l')
-        elif alignment == 'center':
-            return('c')
-        elif alignment == 'end':
-            return('r')
+        ans = ''
+        if len(lines) == 1:
+            if draw[0]:
+                ans = '\\hline'
         else:
-            raise Exception('No alignment character for alignment {}'.format(alignment))
+            x = 1
+            for n, line in enumerate(lines):
+                if draw[n]:
+                    ans += '\\cline{{{:d}-{:d}}}'.format(x,x+line-1)
 
-# ----------------------------------------------------------------------------------------------------------------
+                x+=line
 
-    def latex(self, **kwargs):
-        string = ''
-        nrows, ncols = self.shape()
+        if len(ans):
+            ans += '\n'
 
-        self.split_vertical()
+        return ans
 
-        hl = self.get_horizontal_lines()
-        vl = self.get_vertical_lines()
+    def to_latex(self):
+        '''
+        Return a string containing the latex code to produce the table.
+        '''
+        # First, get the default borders for each column
+        vertical_borders = []
+        for x in range(self.w+1):
+            n_drawn = 0
+            for y in range(self.h):
+                if self.borders_left[y,x]:
+                    n_drawn += 1
 
-        marked_columns = []
-        for item in vl:
-            n_marked = len(item)
-            if n_marked > nrows/2.:
-                marked_columns.append(True)
+            if n_drawn > self.w/2:
+                vertical_borders.append(True)
             else:
-                marked_columns.append(False)
+                vertical_borders.append(False)
 
-        mark = marked_columns[0]
+        # Now get the default text alignments for each column
+        default_alignments = self.w*['center']
+        for x in range(self.w):
+            count = {
+                    'start'  : 0,
+                    'center' : 0,
+                    'end'    : 0
+                    }
 
-        upper_line = False
+            for y in range(self.h):
+                if np.all(self.owner[y,x,:] == [y,x]):
+                    count[self.text_alignments[y,x]] += 1
 
-        for db in hl[0]:
-            string += '\\cline{{{}-{}}}'.format(db[0], db[1])
-            upper_line = True
+                default_alignments[x] = max(count, key=count.get)
 
-        if upper_line: string += '\n'
+        # Write header
+        header = '\\begin{tabular}{'
 
-        col_align = self.get_column_alignments()
+        for n, border in enumerate(vertical_borders):
+            if border:
+                header += '|'
 
-        for nr in range(nrows):
-            for nc in range(ncols):
-                curr_cell = self.cells[nr][nc]
+            if n < self.w:
+                if default_alignments[n] == 'start':
+                    header += 'l'
+                elif default_alignments[n] == 'center':
+                    header += 'c'
+                elif default_alignments[n] == 'end':
+                    header += 'r'
+                else:
+                    raise Exception('Don''t know alignment {}'.format(default_alignments[n]))
 
-                if not curr_cell.covered:
-                    # ---------------------------------------------------------------------------------------
-                    # Check if we need to use multicolumn for the particular cell. This will happen if:
-                    # a) The cell has different alignment than the column
-                    # b) The cell occupies two or more spaces 
-                    # c) The cell has different borders than the column 
-                    use_multicolumn = False
-                    fmt1 = ''
-                    fmt2 = ''
-                    al   = ''
+        header += '}\n'
 
-                    # Check if we need to specify left border
-                    if nc == 0:
-                        mark_l = True if nr+1 in vl[0] else False
+        body = ''
 
-                        if mark_l != marked_columns[0]: use_multicolumn = True
-                            #fmt1 = '|' if mark else ' '
+        # Draw the top horizontal border
+        body += self.draw_horizontal_border(0)
 
-                    if nc < ncols:
-                        # Check if we need to specify right border
-                        mark_r = True if nr+1 in vl[nc+1] else False
+        for y in range(self.h):
+            curr_vert_borders = vertical_borders.copy()
+            for x in range(self.w):
 
-                        if mark_r != marked_columns[nc+1]: use_multicolumn = True
-                            #fmt2 = '|' if mark else ' '
+                if self.owner[y,x,1] == x:
+                    y0, x0 = self.owner[y,x]
+                    h, w = self.get_cell_dimensions(y0,x0)
 
-                    if curr_cell.alignment_h != col_align[nc] or curr_cell.width > 1: use_multicolumn = True
+                    pre_str = ''
+                    post_str = ''
 
-                    # ---------------------------------------------------------------------------------------
-                    # Now define the format and alignment chars. These will be used in write_latex to 
-                    # properly set up the multicolumn environment if needed.
-                    if use_multicolumn:
-                        fmt1 = '|' if mark_l else ' '
-                        fmt2 = '|' if mark_r else ' '
-                        al = self.alignment_char(curr_cell.alignment_h)
+                    # Here we produce the alignment string. It is only relevant
+                    # if:
+                    #
+                    # a) The borders of the current cell are different from the
+                    #    default ones for this column
+                    # b) The alignment of the current cell is different from
+                    #    the default one for this column
+                    # c) The cell occupies more than one column.
+                    #
+                    # Borders are only drawn to the right, except for the first
+                    # column, where they are also drawn to the left.
 
-                    string += write_cell(curr_cell, fmt1, fmt2, al)
+                    alignment_str = ''
+                    multicol_required = False
 
-                    # Add the separator or newline symbols
-                    if nc + curr_cell.width < ncols:
-                        string += " & "
+                    # Leftmost border of the table
+                    if x == 0:
+                        if self.borders_left[y,0] != curr_vert_borders[0] or w>1 or self.borders_left[y,1] != curr_vert_borders[1] or self.text_alignments[y,x] != default_alignments[0]:
+                            multicol_required = True
+                            alignment_str += '|' if self.borders_left[y,0] else ''
+
+                    if self.text_alignments[y,x] == 'center':
+                        alignment_str += 'c'
+                    elif self.text_alignments[y,x] == 'start': 
+                        alignment_str += 'l'
                     else:
-                        string += "\\\\\n"
+                        alignment_str += 'r'
 
-            lower_line = False
-            for db in hl[nr+1]:
-                string += '\\cline{{{}-{}}}'.format(db[0], db[1])
-                lower_line = True
+                    if x==x0 and (w>1 or self.borders_left[y,x+w] != curr_vert_borders[x+w] or self.text_alignments[y,x] != default_alignments[x]) or multicol_required:
+                        multicol_required = True
+                        alignment_str += '|' if self.borders_left[y,x+w] else ''
 
-            if lower_line: string += '\n'
+                    # Now produce a multirow or multicolumn environment if 
+                    # required
+                    if multicol_required:
+                        pre_str += '\\multicolumn{' + str(w) + '}{' + alignment_str + '}{'
+                        post_str += '}'
 
-        if 'header' in kwargs:
-            header = kwargs['header']
-        else:
-            header = True
+                    if h > 1:
+                        pre_str += '\\multirow{' + str(h) + '}{*}{'
+                        post_str += '}'
 
-        if header:
-            string2 = '\\begin{tabular}{' 
-            string2 += '|' if mark else ''
+                    text = ''
+                    if y0 == y:
+                        text = self.data[y][x]
 
-            for n, mark in enumerate(marked_columns[1:]):
-                if   col_align[n] == 'start' : char = 'l'
-                elif col_align[n] == 'center': char = 'c'
-                elif col_align[n] == 'end'   : char = 'r'
+                    body += pre_str + text + post_str
 
-                string2 += self.alignment_char(col_align[n])
-                string2 += '|' if mark else ''
-
-            string2 += '}\n'
-
-            string = string2 + string
-            string += '\\end{tabular}\n'
-
-        return(string)
-
-# ------------------------------------------------------------------------------
-    def get_latex_column_widths(self, string):
-        lines = string.split('\n')
-        lines = [line.strip() for line in lines]
-
-        widths = []
-
-        for line in lines:
-            match = re.match('(.*?)\\\\$', line)
-
-            if match:
-                info = match.group(1)
-                data = info.split('&')
-
-                lengths = []
-                for word in data:
-                    match_mc = re.search('\\\\multicolumn{(.*?)}', word)
-                    if match_mc:
-                        n = int(match_mc.group(1))
+                    if x+w < self.w:
+                        body += ' & '
                     else:
-                        n = 1
+                        body += '\\\\\n'
 
-                    width = len(word.strip())
-                    curr_width = int(np.ceil(width/float(n)))
-                    for k in range(n):
-                        lengths.append(curr_width)
+            # Now draw horizontal lines
+            body += self.draw_horizontal_border(y+1)
 
-                widths.append(lengths)
+        epilog = '\\end{tabular}\n' 
 
-        widths = np.array(widths, dtype = int)
-
-        nrows, ncols = widths.shape
-
-        max_widths = []
-        for nc in range(ncols):
-            max_widths.append(max(widths[:, nc]))
-
-        return(max_widths)
-
-    def tabularize_latex(self, string):
-        nrows, ncols = self.shape()
-        widths = self.get_latex_column_widths(string)
-
-        lines = string.split('\n')
-        lines = [line.strip() for line in lines]
-
-        string2 = ""
-        for nl, line in enumerate(lines):
-            match = re.match('^(.*?)\\\\\\\\$', line)
-
-            if match:
-                info = match.group(1)
-                data = info.split('&')
-
-                lengths = []
-
-                ni = 0
-                for nw, word in enumerate(data):
-                    match_mc = re.search('\\\\multicolumn{(.*?)}', word)
-
-                    if match_mc:
-                        n = int(match_mc.group(1))
-                    else:
-                        n = 1
-
-                    separator = ' & '
-                    n1 = (n-1)*len(separator)
-
-                    for k in range(n):
-                        n1 += widths[k+ni] 
-
-                    ni += n
-
-                    string2 += ('{:' + str(n1) + '}').format(word.strip())
-
-                    if nw == len(data) - 1:
-                        string2 += '\\\\'
-                    else:
-                        string2 += separator
-            else:
-                string2 += line
-
-            if nl != len(lines) - 1:
-                string2 += '\n'
-
-        return(string2)
+        return [header, body, epilog]

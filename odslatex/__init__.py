@@ -17,21 +17,4 @@
 # You should have received a copy of the GNU General Public License along with
 # odslatex. If not, see <https://www.gnu.org/licenses/>.
 
-from setuptools import setup, find_packages
 
-setup(
-        name = 'odslatex',
-        version = '0.3',
-        author = 'Javier Garcia', 
-        long_description = 'No description for now',
-        packages = find_packages(),
-        entry_points = {
-            'console_scripts' : [
-                'odslatex = odslatex.main:main'
-                ]
-            },
-        install_requires = [
-            'numpy',
-            'lxml'
-            ]
-        )
