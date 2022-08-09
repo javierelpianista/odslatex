@@ -21,7 +21,7 @@ from setuptools import setup, find_packages
 
 setup(
         name = 'odslatex',
-        version = '0.3',
+        version = '0.3.1',
         author = 'Javier Garcia', 
         long_description = 'No description for now',
         packages = find_packages(),

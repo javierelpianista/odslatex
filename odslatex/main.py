@@ -35,7 +35,7 @@ parser.add_argument('--print-debug-info', help='Print the contents of the parsed
 
 parser.add_argument('filename', help='Filename')
 
-def list_tables(args, return_count=False):
+def list_tables(**kwargs):
     '''
     Extract the content.xml file from the original ods file and read the sheets
     in there. Print a list with al the sheet names.
@@ -45,7 +45,15 @@ def list_tables(args, return_count=False):
 
     filename: name of the file to read
     '''
-    with ZipFile(args.filename, 'r') as zipobj:
+
+    args = {
+            'return_list' : False,
+            'filename'     : ''
+            }
+
+    args.update(kwargs)
+
+    with ZipFile(args['filename'], 'r') as zipobj:
         xml_content = zipobj.read('content.xml')
 
     tree = etree.fromstring(xml_content)
@@ -64,10 +72,10 @@ def list_tables(args, return_count=False):
                 table.attrib[ etree.QName(ns['table'],'name') ]
                     )
 
-    if return_count:
-        return len(table_names)
+    if args['return_list']:
+        return table_names
 
-    ans = 'List of sheets from {}:\n'.format(args.filename)
+    ans = 'List of sheets from {}:\n'.format(args['filename'])
     for n, name in enumerate(table_names):
         ans += '{:4d}: {:75}\n'.format(n, name)
 
@@ -105,7 +113,7 @@ def latex_document(tables):
 
     return text
 
-def convert_table(args):
+def convert_table(**kwargs):
     '''
     Convert a table read from the .ods file <filename> into LaTeX.
     If the .ods file has several sheets, then choose the <which>-th sheet.
@@ -117,11 +125,20 @@ def convert_table(args):
     which (int): which table to convert
     '''
 
-    table = Table.from_ods(args.filename,sheet=int(args.which),print_debug_info=args.print_debug_info)
+    args = {
+            'filename'                  : '',
+            'which'                     : 0,
+            'print_debug_info'          : False,
+            'write_tabular_environment' : True
+            }
+
+    args.update(kwargs)
+
+    table = Table.from_ods(args['filename'],sheet=int(args['which']),print_debug_info=args['print_debug_info'])
     header, body, epilog = table.to_latex()
     body = beautify_body(body)
 
-    if args.write_tabular_environment:
+    if args['write_tabular_environment']:
         table_text = ''.join([header, body, epilog])
     else:
         table_text = body
@@ -247,12 +264,14 @@ def main():
         args.output_file.write(list_tables(args))
     else:
         if args.which == 'all':
-            ntables = int(list_tables(args, return_count=True))
+            curr_args = vars(args).copy()
+            curr_args['return_count'] = True
+            ntables = int(list_tables(**curr_args))
 
             tables_list = []
             for n in range(ntables):
                 args.which = n
-                tables_list.append(convert_table(args))
+                tables_list.append(convert_table(**args.to_dict()))
 
             if args.minimal_latex:
                 args.output_file.write(latex_document(tables_list))
@@ -264,9 +283,9 @@ def main():
             n = int(args.which)
 
             if args.minimal_latex:
-                args.output_file.write(latex_document(convert_table(args)))
+                args.output_file.write(latex_document(**vars(args)))
             else:
-                args.output_file.write(convert_table(args))
+                args.output_file.write(convert_table(**vars(args)))
 
 
 if __name__ == '__main__':
