@@ -47,7 +47,7 @@ odslatex examples/fancy_table.ods --which N
 ```
 
 ### Graphical interface? 
-It would be nice to have a graphical interface. For now, the `odslatex_zenity.sh` script is provided. It opens a file-select prompt where you can choose the file you want to convert. If the selected Calc document has more than one sheet, it asks you to select which sheet to convert. The result is pasted into the clipboard. To run it, you need to have installed both `zenity` and `xclip`, and some notification daemon running. Most Linux distributions should have these by default.
+I'm working on a graphical interface as well. Please, see [odslatex-qt](https://github.com/javierelpianista/odslatex-qt).
 
 ## What odslatex can convert
 Currently, the program can convert cells spanning multiple rows and columns into their corresponding `\multicolumn` and `\multirow` LaTeX environments. It can also detect borders and mark them, and detect horizontal alignment.
